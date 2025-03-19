@@ -1,10 +1,10 @@
 import tkinter as tk
 from tkinter import filedialog, messagebox
 import xml.etree.ElementTree as ET
-from reportlab.lib.pagesizes import A4
-from reportlab.platypus import SimpleDocTemplate, Table, TableStyle, Paragraph, Spacer
-from reportlab.lib import colors
-from reportlab.lib.styles import getSampleStyleSheet
+from reportlab.lib.pagesizes import A4 # type: ignore
+from reportlab.platypus import SimpleDocTemplate, Table, TableStyle, Paragraph, Spacer # type: ignore
+from reportlab.lib import colors # type: ignore
+from reportlab.lib.styles import getSampleStyleSheet # type: ignore
 import zipfile
 import os
 
