@@ -1,12 +1,13 @@
 import tkinter as tk
-from tkinter import filedialog, messagebox
+from tkinter import filedialog, messagebox, ttk
 import xml.etree.ElementTree as ET
-from reportlab.lib.pagesizes import A4 # type: ignore
-from reportlab.platypus import SimpleDocTemplate, Table, TableStyle, Paragraph, Spacer # type: ignore
-from reportlab.lib import colors # type: ignore
-from reportlab.lib.styles import getSampleStyleSheet # type: ignore
+from reportlab.lib.pagesizes import A4
+from reportlab.platypus import SimpleDocTemplate, Table, TableStyle, Paragraph, Spacer
+from reportlab.lib import colors
+from reportlab.lib.styles import getSampleStyleSheet
 import zipfile
 import os
+from concurrent.futures import ThreadPoolExecutor, as_completed
 
 def selecionar_arquivos():
     """Abre uma janela para selecionar um ou mais arquivos XML ou compactados"""
@@ -30,6 +31,37 @@ def extrair_arquivos_compactados(arquivos):
                         xml_files.append(os.path.join(extracao_dir, nome))
     return xml_files
 
+def processar_xml(arquivo_xml):
+    """Processa um arquivo XML e retorna os dados relevantes"""
+    try:
+        tree = ET.parse(arquivo_xml)
+        root = tree.getroot()
+        
+        # Extração dos dados do emissor
+        emissor = root.find(".//{http://www.portalfiscal.inf.br/nfe}emit")
+        if emissor is not None:
+            emissor_info = {
+                "CNPJ": emissor.find(".//{http://www.portalfiscal.inf.br/nfe}CNPJ").text,
+                "Razao Social": emissor.find(".//{http://www.portalfiscal.inf.br/nfe}xNome").text,
+                "Nome Fantasia": emissor.find(".//{http://www.portalfiscal.inf.br/nfe}xFant").text,
+                "Endereco": f"{emissor.find('.//{http://www.portalfiscal.inf.br/nfe}xLgr').text}, {emissor.find('.//{http://www.portalfiscal.inf.br/nfe}nro').text}, {emissor.find('.//{http://www.portalfiscal.inf.br/nfe}xBairro').text}, {emissor.find('.//{http://www.portalfiscal.inf.br/nfe}xMun').text} - {emissor.find('.//{http://www.portalfiscal.inf.br/nfe}UF').text}"
+            }
+        else:
+            emissor_info = {}
+        
+        # Extração dos dados das notas
+        dados_vendas = []
+        notas = root.findall(".//{http://www.portalfiscal.inf.br/nfe}det")
+        for nota in notas:
+            valor = float(nota.find(".//{http://www.portalfiscal.inf.br/nfe}vProd").text)
+            descricao = nota.find(".//{http://www.portalfiscal.inf.br/nfe}xProd").text
+            dados_vendas.append([descricao, f"R$ {valor:.2f}"])
+        
+        return emissor_info, dados_vendas
+    except Exception as e:
+        messagebox.showerror("Erro", f"Erro ao processar o arquivo {arquivo_xml}: {e}")
+        return {}, []
+
 def gerar_pdf():
     """Lê os XMLs e gera um relatório em PDF formatado"""
     arquivos_selecionados = entrada_arquivo.get().split("; ")
@@ -43,29 +75,22 @@ def gerar_pdf():
     dados_vendas = []
     emissor_info = {}
     
+    # Barra de progresso
+    progresso = ttk.Progressbar(janela, orient="horizontal", length=300, mode="determinate")
+    progresso.pack(pady=10)
+    progresso["maximum"] = len(xml_files)
+    
     try:
-        for arquivo_xml in xml_files:
-            tree = ET.parse(arquivo_xml)
-            root = tree.getroot()
-            
-            # Extração dos dados do emissor
-            if not emissor_info:
-                emissor = root.find(".//{http://www.portalfiscal.inf.br/nfe}emit")
-                if emissor is not None:
-                    emissor_info = {
-                        "CNPJ": emissor.find(".//{http://www.portalfiscal.inf.br/nfe}CNPJ").text,
-                        "Razao Social": emissor.find(".//{http://www.portalfiscal.inf.br/nfe}xNome").text,
-                        "Nome Fantasia": emissor.find(".//{http://www.portalfiscal.inf.br/nfe}xFant").text,
-                        "Endereco": f"{emissor.find('.//{http://www.portalfiscal.inf.br/nfe}xLgr').text}, {emissor.find('.//{http://www.portalfiscal.inf.br/nfe}nro').text}, {emissor.find('.//{http://www.portalfiscal.inf.br/nfe}xBairro').text}, {emissor.find('.//{http://www.portalfiscal.inf.br/nfe}xMun').text} - {emissor.find('.//{http://www.portalfiscal.inf.br/nfe}UF').text}"
-                    }
-            
-            # Extração dos dados das notas
-            notas = root.findall(".//{http://www.portalfiscal.inf.br/nfe}det")
-            for nota in notas:
-                valor = float(nota.find(".//{http://www.portalfiscal.inf.br/nfe}vProd").text)
-                total_vendas += valor
-                descricao = nota.find(".//{http://www.portalfiscal.inf.br/nfe}xProd").text
-                dados_vendas.append([descricao, f"R$ {valor:.2f}"])
+        with ThreadPoolExecutor() as executor:
+            futures = {executor.submit(processar_xml, arquivo_xml): arquivo_xml for arquivo_xml in xml_files}
+            for i, future in enumerate(as_completed(futures)):
+                progresso["value"] = i + 1
+                janela.update_idletasks()
+                emissor_info_partial, dados_vendas_partial = future.result()
+                if not emissor_info and emissor_info_partial:
+                    emissor_info = emissor_info_partial
+                dados_vendas.extend(dados_vendas_partial)
+                total_vendas += sum(float(dado[1].replace("R$ ", "")) for dado in dados_vendas_partial)
         
         # Escolher local para salvar
         nome_pdf = filedialog.asksaveasfilename(defaultextension=".pdf", filetypes=[("Arquivo PDF", "*.pdf")])
@@ -104,6 +129,8 @@ def gerar_pdf():
         messagebox.showinfo("Sucesso", f"Relatório gerado: {nome_pdf}")
     except Exception as e:
         messagebox.showerror("Erro", f"Erro ao processar XML: {e}")
+    finally:
+        progresso.pack_forget()
 
 # Criar a interface gráfica
 janela = tk.Tk()
